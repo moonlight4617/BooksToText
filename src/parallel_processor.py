@@ -95,7 +95,6 @@ class ParallelOCRProcessor:
                                 
                                 if result:
                                     results.append(result)
-                                    print(f"result: {result}")
                                     completed_count += 1
                                     
                                     # 進捗コールバック呼び出し
