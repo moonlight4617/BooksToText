@@ -4,6 +4,7 @@
 """
 
 import os
+import re
 from pathlib import Path
 from PIL import Image, ImageEnhance
 import cv2
@@ -47,10 +48,42 @@ class ImageUtils:
             if file_path.is_file() and file_path.suffix.lower() in self.supported_extensions:
                 image_files.append(file_path)
         
-        # ファイル名でソート
-        image_files.sort(key=lambda x: x.name)
+        # 数値順でソート（page_001.png, page_002.png, ..., page_999.png, page_1000.png の順）
+        image_files.sort(key=self._natural_sort_key)
         
         return image_files
+    
+    def _natural_sort_key(self, file_path):
+        """
+        ファイル名の数値部分を考慮した自然順ソート用のキー生成
+        
+        Args:
+            file_path: ファイルパス
+            
+        Returns:
+            tuple: ソート用キー
+        """
+        name = file_path.name
+        
+        # 文字と数字を分割してソートキーを作成
+        key_parts = []
+        i = 0
+        while i < len(name):
+            # 非数字部分を取得
+            start = i
+            while i < len(name) and not name[i].isdigit():
+                i += 1
+            if i > start:
+                key_parts.append(name[start:i])
+            
+            # 数字部分を取得
+            start = i
+            while i < len(name) and name[i].isdigit():
+                i += 1
+            if i > start:
+                key_parts.append(int(name[start:i]))
+        
+        return key_parts
     
     def preprocess_image(self, image_path):
         """
@@ -103,10 +136,12 @@ class ImageUtils:
         gray = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
         
         # 3. ノイズ除去（Non-local Means Denoising）
-        denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+        # 図表ページ向けに強度を調整
+        denoised = cv2.fastNlMeansDenoising(gray, None, 8, 7, 21)
         
         # 4. コントラスト強化（CLAHE: Contrast Limited Adaptive Histogram Equalization）
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        # 図表向けに細かい詳細を保持
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(6,6))
         contrast_enhanced = clahe.apply(denoised)
         
         # 5. 傾き補正
@@ -247,8 +282,8 @@ class ImageUtils:
             # 連結成分分析でノイズ除去
             num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_image, connectivity=8)
             
-            # 小さな成分を除去
-            min_size = 50  # 最小成分サイズ
+            # 小さな成分を除去（図表のラベル等を保持するため緩和）
+            min_size = 25  # 最小成分サイズ
             cleaned = np.zeros_like(binary_image)
             
             for i in range(1, num_labels):  # 0は背景なので除外
@@ -298,6 +333,82 @@ class ImageUtils:
         except Exception as e:
             print(f"文字領域検出エラー: {e}")
             return []
+    
+    def preprocess_image_for_charts(self, image_path):
+        """
+        図表ページ特化の画像前処理
+        
+        Args:
+            image_path: 画像ファイルパス
+            
+        Returns:
+            PIL.Image: 図表向け前処理済み画像
+        """
+        try:
+            # 画像読み込み
+            image = Image.open(image_path)
+            
+            # RGBに変換
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            
+            # 図表向け特殊処理
+            processed_image = self._enhance_image_for_charts(image)
+            
+            return processed_image
+            
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"図表向け画像前処理エラー: {e}")
+            else:
+                print(f"図表向け画像前処理エラー: {e}")
+            return None
+    
+    def _enhance_image_for_charts(self, image):
+        """
+        図表専用の画像品質向上処理
+        
+        Args:
+            image: PIL.Image オブジェクト
+            
+        Returns:
+            PIL.Image: 図表向け品質向上済み画像
+        """
+        # OpenCV形式に変換
+        opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        # 1. 高解像度アップスケーリング（3倍）
+        height, width = opencv_image.shape[:2]
+        opencv_image = cv2.resize(opencv_image, (width*3, height*3), interpolation=cv2.INTER_LANCZOS4)
+        
+        # 2. グレースケール変換
+        gray = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
+        
+        # 3. 軽いノイズ除去（図表の線を保持）
+        denoised = cv2.bilateralFilter(gray, 5, 50, 50)
+        
+        # 4. 適応的コントラスト強化
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4,4))
+        contrast_enhanced = clahe.apply(denoised)
+        
+        # 5. シャープニング（文字の鮮明化）
+        kernel = np.array([[-1,-1,-1],
+                          [-1, 9,-1],
+                          [-1,-1,-1]])
+        sharpened = cv2.filter2D(contrast_enhanced, -1, kernel)
+        
+        # 6. 適応的二値化（図表の多様な背景に対応）
+        binary = cv2.adaptiveThreshold(sharpened, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                     cv2.THRESH_BINARY, 15, 10)
+        
+        # 7. モルフォロジー処理（文字の連結性改善）
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2,2))
+        morphed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+        
+        # PIL形式に戻す
+        result = Image.fromarray(morphed)
+        
+        return result
 
 
 class TextUtils:

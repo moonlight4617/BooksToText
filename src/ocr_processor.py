@@ -14,12 +14,17 @@ class OCRProcessor:
         pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
         
         # 複数のOCR設定（PSM: Page Segmentation Mode）
+        # 図表ページ対応を強化した設定
         self.ocr_configs = [
             r'--oem 3 --psm 6 -l jpn',   # 単一の均一テキストブロック
             r'--oem 3 --psm 3 -l jpn',   # 完全な自動ページセグメンテーション
             r'--oem 3 --psm 4 -l jpn',   # 可変サイズの単一テキスト列
             r'--oem 3 --psm 1 -l jpn',   # OSD付き自動ページセグメンテーション
             r'--oem 3 --psm 11 -l jpn',  # スパーステキスト
+            r'--oem 3 --psm 8 -l jpn',   # 単語レベル（図表内の小さなテキスト）
+            r'--oem 3 --psm 7 -l jpn',   # 単一テキスト行（図表キャプション）
+            r'--oem 3 --psm 12 -l jpn',  # 単語レベル・スパーステキスト（図中ラベル）
+            r'--oem 3 --psm 13 -l jpn',  # 生の行・文字の境界を検出しない
         ]
         
         # デフォルト設定
@@ -57,9 +62,9 @@ class OCRProcessor:
                     print(f"OCR設定 {config} でエラー: {e}")
                     continue
             
-            # フォールバック: すべて失敗した場合はデフォルト設定で再試行
+            # フォールバック: すべて失敗した場合は図表向け処理を追加
             if not best_text.strip():
-                best_text = pytesseract.image_to_string(image, config=self.default_config)
+                best_text = self._extract_sparse_text_with_enhanced_processing(image)
             
             # テキスト後処理
             cleaned_text = self._postprocess_text(best_text)
@@ -163,3 +168,88 @@ class OCRProcessor:
                 continue
         
         return '\n'.join(extracted_texts)
+    
+    def _extract_sparse_text(self, image):
+        """
+        図表ページ向けのスパーステキスト抽出
+        複数の特殊設定を組み合わせて微細なテキストも抽出
+        
+        Args:
+            image: PIL.Image オブジェクト
+            
+        Returns:
+            str: 抽出されたテキスト
+        """
+        try:
+            # 図表向け特殊設定
+            sparse_configs = [
+                r'--oem 3 --psm 8 -l jpn',   # 単語レベル
+                r'--oem 3 --psm 7 -l jpn',   # 単一行
+                r'--oem 3 --psm 12 -l jpn',  # スパース単語
+                r'--oem 3 --psm 13 -l jpn',  # 生の行
+                r'--oem 3 --psm 6 -l jpn -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん一二三四五六七八九十百千万億兆',  # 文字制限
+            ]
+            
+            extracted_parts = []
+            
+            for config in sparse_configs:
+                try:
+                    text = pytesseract.image_to_string(image, config=config)
+                    if text.strip():
+                        extracted_parts.append(text.strip())
+                        print(f"スパース抽出成功: '{text.strip()[:50]}...'")
+                except Exception as e:
+                    print(f"スパース設定 {config} でエラー: {e}")
+                    continue
+            
+            # 抽出されたテキストがある場合は結合
+            if extracted_parts:
+                combined_text = ' '.join(extracted_parts)
+                return combined_text
+            
+            # それでも失敗した場合は代替テキストを返す
+            return "[図表ページ - テキスト抽出困難]"
+            
+        except Exception as e:
+            print(f"スパーステキスト抽出エラー: {e}")
+            return "[図表ページ - 処理エラー]"
+    
+    def _extract_sparse_text_with_enhanced_processing(self, image):
+        """
+        図表向け画像前処理を含むスパーステキスト抽出
+        通常のOCRが失敗した場合のみ実行される高負荷処理
+        
+        Args:
+            image: PIL.Image オブジェクト
+            
+        Returns:
+            str: 抽出されたテキスト
+        """
+        try:
+            print("図表向け特殊処理を開始...")
+            
+            # まず通常のスパース抽出を試行
+            sparse_result = self._extract_sparse_text(image)
+            if sparse_result.strip() and not sparse_result.startswith("[図表ページ"):
+                return sparse_result
+            
+            # 図表向け前処理を適用
+            from utils import ImageUtils
+            image_utils = ImageUtils()
+            
+            # PIL ImageをOpenCVに変換して図表向け処理
+            enhanced_image = image_utils._enhance_image_for_charts(image)
+            
+            if enhanced_image:
+                # 拡張処理後のOCR実行
+                enhanced_result = self._extract_sparse_text(enhanced_image)
+                if enhanced_result.strip() and not enhanced_result.startswith("[図表ページ"):
+                    print("図表向け前処理により抽出成功")
+                    return enhanced_result
+            
+            # 最終的にも失敗した場合
+            return "[図表ページ - テキスト抽出困難]"
+            
+        except Exception as e:
+            print(f"図表向け特殊処理エラー: {e}")
+            return "[図表ページ - 処理エラー]"

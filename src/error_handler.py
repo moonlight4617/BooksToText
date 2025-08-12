@@ -5,10 +5,11 @@
 
 import time
 import traceback
-from functools import wraps
-from pathlib import Path
 import json
 import os
+from functools import wraps
+from pathlib import Path
+from utils import ImageUtils
 
 
 class OCRError(Exception):
@@ -64,10 +65,9 @@ class ErrorHandler:
         if not os.access(input_path, os.R_OK):
             raise FileProcessError(f"ディレクトリの読み取り権限がありません: {input_dir}")
         
-        # 画像ファイルの存在確認
-        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
-        image_files = [f for f in input_path.iterdir() 
-                      if f.is_file() and f.suffix.lower() in image_extensions]
+        # ImageUtilsを使用して正しい順序でファイルを取得
+        image_utils = ImageUtils()
+        image_files = image_utils.get_image_files(input_path)
         
         if not image_files:
             raise FileProcessError(f"画像ファイルが見つかりません: {input_dir}")
