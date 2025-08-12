@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\Users\\ryoji.tanabe\\自己研鑽\\kindleToText\\input\\OSのしくみ\\*.png\" /b)",
+      "Bash(find:*)"
+    ],
+    "deny": []
+  }
+}

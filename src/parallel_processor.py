@@ -67,7 +67,6 @@ class ParallelOCRProcessor:
                     if killer and killer.is_killed():
                         self.log_message("タスクサブミット中に停止要求を受信", 'warning')
                         break
-                        
                     future = executor.submit(
                         self._process_single_image, 
                         image_path, 
